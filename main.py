@@ -114,6 +114,16 @@ def handle_request_state(data):
     if room_id:
         game_manager.emit_state_update(room_id)
 
+@socketio.on('ping_check')
+def handle_ping_check(data):
+    from flask_socketio import emit
+    emit('pong_check', {})
+
+@socketio.on('request_state')
+def handle_request_state(data):
+    room_id = data.get('roomId')
+    if room_id:
+        game_manager.emit_state_update(room_id)
 
 # HTTP route
 @app.route('/', methods=['GET'])
