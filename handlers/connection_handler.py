@@ -37,33 +37,21 @@ class ConnectionHandler:
                     player_id = player_to_update["id"]
                     player_name = player_to_update["name"]
                     
-                    # If in waiting phase, mark as disconnected with rejoin window
+                    # If in waiting phase, remove completely
                     if room["phase"] == "waiting":
-                        player_to_update["disconnected"] = True
-                        player_to_update["disconnect_time"] = time.time()
-                        player_to_update.pop("socket_id", None)
-                        room["lobby_events"].append(f"{player_name} has disconnected.")
-
-                        current_time = time.time()
-                        expired_players = [p for p in room["players"]
-                                        if p.get("disconnected") and
-                                        (current_time - p.get("disconnect_time", 0)) > 60]
-                        for expired_player in expired_players:
-                            room["players"] = [p for p in room["players"] if p["id"] != expired_player["id"]]
-                            room["lobby_events"].append(f"{expired_player['name']} was removed (timed out).")
-
-                        active_players = get_active_players(room["players"])
-
-                        if not active_players:
+                        room["players"] = [p for p in room["players"] if p["id"] != player_id]
+                        room["lobby_events"].append(f"{player_name} has left the game.")
+                        
+                        if not room["players"]:
                             self.db_manager.delete_room(room_id)
-                            print(f"Room {room_id} has no active players and has been removed.")
+                            print(f"Room {room_id} is empty and has been removed.")
                             return
-
-                        if player_id == room["host_id"]:
-                            room["host_id"] = active_players[0]["id"]
-                            new_host_name = active_players[0]["name"]
+                        
+                        if player_id == room["host_id"] and room["players"]:
+                            room["host_id"] = room["players"][0]["id"]
+                            new_host_name = room["players"][0]["name"]
                             room["lobby_events"].append(f"{new_host_name} is the new host.")
-
+                        
                         self.db_manager.update_room(room_id, room)
                         room_to_update = room_id
                         break
