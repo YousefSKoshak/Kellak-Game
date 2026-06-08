@@ -12,7 +12,7 @@ from handlers.connection_handler import ConnectionHandler
 
 # Initialize Flask app and SocketIO
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", ping_timeout=5, ping_interval=3)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Initialize components
 db_manager = DatabaseManager()
