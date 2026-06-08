@@ -134,9 +134,20 @@ class ConnectionHandler:
                         room["lobby_events"].append(f"{new_host_name} is the new host.")
 
                     self.check_phase_transition_after_disconnect(room, room_id, active_players)
+                    
+                    # ✅ Extract scheduled transitions before saving
+                    schedule_voting = room.pop("_schedule_voting_transition", None)
+                    schedule_vote_selection = room.pop("_schedule_vote_selection_transition", None)
 
                     self.db_manager.update_room(room_id, room)
                     room_to_update = room_id
+                    
+                    # ✅ Schedule timers OUTSIDE the lock
+                    if schedule_voting:
+                        self.game_manager.schedule_phase_transition(room_id, 'voting', schedule_voting, 'vote_selection')
+                    if schedule_vote_selection:
+                        self.game_manager.schedule_phase_transition(room_id, 'vote_selection', 30, 'results')
+                    
                     break
         
         if room_to_update:
@@ -147,11 +158,8 @@ class ConnectionHandler:
         phase = room["phase"]
         
         if phase == "question":
-            # Check if all ACTIVE players have submitted
             answers_count = len(room.get("answers", {}))
             active_count = len(active_players)
-            
-            # Get the actual player IDs who have submitted
             submitted_ids = list(room.get("answers", {}).keys())
             active_ids = [p["id"] for p in active_players]
             
@@ -164,13 +172,16 @@ class ConnectionHandler:
             
             if answers_count == len(active_players) and len(active_players) > 0:
                 print(f"   ✅ All active players answered, transitioning to voting")
+                import time
                 room["phase"] = "voting"
                 room["votingPhaseStartTimestamp"] = int(time.time() * 1000)
+                discuss_time = room.get("settings", {}).get("discussTime", 180)
+                room["votingPhaseEndTimestamp"] = int(time.time() * 1000) + (discuss_time * 1000)
                 room["lobby_events"].append("All answers are in! Time to vote.")
                 room['ready_to_vote'] = []
+                room["_schedule_voting_transition"] = discuss_time  # ✅ signal to caller
         
         elif phase == "voting":
-            # Similar detailed logging for voting phase
             ready_count = len(room.get("ready_to_vote", []))
             active_count = len(active_players)
             
@@ -181,10 +192,14 @@ class ConnectionHandler:
             
             if ready_count == len(active_players) and len(active_players) > 0:
                 print(f"   ✅ All active players ready, transitioning to vote_selection")
+                import time
                 room['phase'] = 'vote_selection'
                 room['voteSelectionStartTimestamp'] = int(time.time() * 1000)
+                room['voteSelectionEndTimestamp'] = int(time.time() * 1000) + 30000
                 room["lobby_events"].append("Time to vote for the imposter!")
                 room["liarVotes"] = {}
+                room['ready_to_vote'] = []
+                room["_schedule_vote_selection_transition"] = True  # ✅ signal to caller
     
     def handle_rejoin_game(self, data):
         """Handle player rejoin request."""
@@ -195,7 +210,7 @@ class ConnectionHandler:
         print(f"🔄 Rejoin request: SID={request.sid}, Room={room_id}, Player={player_id}")
 
         if not room_id or not player_id:
-            emit('error', {"message": "Room ID and Player ID are required."})
+            emit('reconnect_player', {'success': False, 'message': 'Room ID and Player ID are required.'})
             return
 
         try:
@@ -203,35 +218,32 @@ class ConnectionHandler:
                 room = self.db_manager.get_room(room_id)
                 if not room:
                     print(f"❌ Room {room_id} does not exist")
-                    emit('error', {"message": "Room does not exist."})
+                    emit('reconnect_player', {'success': False, 'message': 'Room does not exist.'})
                     return
                 
                 requested_language = data.get("language", "en")
                 room_language = room.get("language", "en")
                 if requested_language != room_language:
-                    emit('reconnect_player', {
-                        'success': False,
-                        'message': "Room doesn't exist"
-                    }, room=request.sid)
+                    emit('reconnect_player', {'success': False, 'message': "Room doesn't exist."})
                     return
 
                 player_to_rejoin = next((p for p in room["players"] if p["id"] == player_id), None)
                 
                 if not player_to_rejoin:
                     print(f"❌ Player {player_id} not found in room {room_id}")
-                    emit('error', {"message": "Player not found in room."})
+                    emit('reconnect_player', {'success': False, 'message': 'Player not found in room.'})
                     return
 
                 if not player_to_rejoin.get("disconnected"):
                     print(f"❌ Player {player_id} is not marked as disconnected")
-                    emit('error', {"message": "Player is not disconnected."})
+                    emit('reconnect_player', {'success': False, 'message': 'Player is not disconnected.'})
                     return
 
                 disconnect_time = player_to_rejoin.get("disconnect_time", 0)
                 elapsed = time.time() - disconnect_time
                 if elapsed > 30:
                     print(f"❌ Reconnection time window expired ({elapsed:.1f}s)")
-                    emit('error', {"message": "Reconnection time window has expired."})
+                    emit('reconnect_player', {'success': False, 'message': 'Reconnection time window has expired.'})
                     return
 
                 print(f"✅ Player rejoining (disconnected for {elapsed:.1f}s)")
@@ -282,4 +294,4 @@ class ConnectionHandler:
             print(f"❌ Error in rejoin_game: {e}")
             import traceback
             traceback.print_exc()
-            emit('error', {"message": "An error occurred during rejoin."})
+            emit('reconnect_player', {'success': False, 'message': 'An error occurred during rejoin.'})

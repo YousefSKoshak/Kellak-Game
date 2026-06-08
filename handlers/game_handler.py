@@ -305,7 +305,8 @@ class GameHandler:
                 room = self.db_manager.get_room(room_id)
                 if room:
                     room['phase'] = 'vote_selection'
-                    room['voteSelectionStartTimestamp'] = time.time()
+                    room['voteSelectionStartTimestamp'] = int(time.time() * 1000)
+                    room['voteSelectionEndTimestamp'] = int(time.time() * 1000) + 30000
                     self.db_manager.update_room(room_id, room)
 
             self.game_manager.emit_state_update(room_id)
