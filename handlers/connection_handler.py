@@ -15,40 +15,6 @@ class ConnectionHandler:
         self.db_manager = db_manager
         self.game_manager = game_manager
         self.socketio = socketio
-        self._start_lobby_cleanup_timer()
-
-    def _start_lobby_cleanup_timer(self):
-        import threading
-        def cleanup_loop():
-            while True:
-                time.sleep(15)
-                try:
-                    for room_id in self.db_manager.get_all_room_ids():
-                        with self.game_manager.lock:
-                            room = self.db_manager.get_room(room_id)
-                            if not room or room.get('phase') != 'waiting':
-                                continue
-                            current_time = time.time()
-                            expired = [p for p in room['players']
-                                       if p.get('disconnected') and
-                                       (current_time - p.get('disconnect_time', 0)) > 30]
-                            if not expired:
-                                continue
-                            for p in expired:
-                                room['players'] = [x for x in room['players'] if x['id'] != p['id']]
-                                room['lobby_events'].append(f"{p['name']} was removed (timed out).")
-                                print(f"🧹 Cleanup: removed {p['name']} from waiting room {room_id}")
-                            active = get_active_players(room['players'])
-                            if not active:
-                                self.db_manager.delete_room(room_id)
-                                print(f"🧹 Cleanup: deleted empty room {room_id}")
-                                continue
-                            self.db_manager.update_room(room_id, room)
-                        self.game_manager.emit_state_update(room_id)
-                except Exception as e:
-                    print(f"🧹 Cleanup error: {e}")
-        threading.Thread(target=cleanup_loop, daemon=True).start()
-        print("🧹 Lobby cleanup timer started")
     
     def handle_connect(self):
         """Handle client connection."""
@@ -71,34 +37,21 @@ class ConnectionHandler:
                     player_id = player_to_update["id"]
                     player_name = player_to_update["name"]
                     
-                    # If in waiting phase, mark as disconnected with 30 second rejoin window
+                    # If in waiting phase, remove completely
                     if room["phase"] == "waiting":
-                        player_to_update["disconnected"] = True
-                        player_to_update["disconnect_time"] = time.time()
-                        player_to_update.pop("socket_id", None)
-                        room["lobby_events"].append(f"{player_name} has disconnected.")
-
-                        # Clean up any players whose window has already expired
-                        current_time = time.time()
-                        expired_players = [p for p in room["players"]
-                                        if p.get("disconnected") and
-                                        (current_time - p.get("disconnect_time", 0)) > 30]
-                        for expired_player in expired_players:
-                            room["players"] = [p for p in room["players"] if p["id"] != expired_player["id"]]
-                            room["lobby_events"].append(f"{expired_player['name']} was removed (timed out).")
-
-                        active_players = get_active_players(room["players"])
-
-                        if not active_players:
+                        room["players"] = [p for p in room["players"] if p["id"] != player_id]
+                        room["lobby_events"].append(f"{player_name} has left the game.")
+                        
+                        if not room["players"]:
                             self.db_manager.delete_room(room_id)
-                            print(f"Room {room_id} has no active players and has been removed.")
+                            print(f"Room {room_id} is empty and has been removed.")
                             return
-
-                        if player_id == room["host_id"]:
-                            room["host_id"] = active_players[0]["id"]
-                            new_host_name = active_players[0]["name"]
+                        
+                        if player_id == room["host_id"] and room["players"]:
+                            room["host_id"] = room["players"][0]["id"]
+                            new_host_name = room["players"][0]["name"]
                             room["lobby_events"].append(f"{new_host_name} is the new host.")
-
+                        
                         self.db_manager.update_room(room_id, room)
                         room_to_update = room_id
                         break
