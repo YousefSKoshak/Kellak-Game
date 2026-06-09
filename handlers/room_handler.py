@@ -114,6 +114,27 @@ class RoomHandler:
                 emit('error_event', {'message': self.get_error_message('room_full', room_language)}, room=request.sid)
                 return
 
+            # Check if this is a disconnected player trying to rejoin by name
+            disconnected_match = next(
+                (p for p in room["players"] if p["name"] == name and p.get("disconnected")),
+                None
+            )
+            if disconnected_match:
+                elapsed = time.time() - disconnected_match.get("disconnect_time", 0)
+                if elapsed <= 30:
+                    # Reconnect them silently
+                    disconnected_match["disconnected"] = False
+                    disconnected_match.pop("disconnect_time", None)
+                    disconnected_match["socket_id"] = request.sid
+                    join_room(room_id)
+                    self.db_manager.update_room(room_id, room)
+                    emit('join_confirmation', {'playerId': disconnected_match["id"], 'roomId': room_id, 'language': room_language}, room=request.sid)
+                    self.game_manager.emit_state_update(room_id)
+                    return
+                else:
+                    # Window expired — remove ghost and let them join fresh
+                    room["players"] = [p for p in room["players"] if p["id"] != disconnected_match["id"]]
+
             if not is_name_available(room["players"], name):
                 emit('error_event', {'message': self.get_error_message('name_taken', room_language)}, room=request.sid)
                 return
